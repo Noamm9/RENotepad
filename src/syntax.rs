@@ -26,6 +26,7 @@ pub struct Cache {
 pub enum Lang {
     Json,
     Toml,
+    Properties,
     Xml,
     Log,
     Kotlin,
@@ -39,6 +40,7 @@ impl Lang {
         match ext.to_ascii_lowercase().as_str() {
             "json" => Some(Lang::Json),
             "toml" => Some(Lang::Toml),
+            "properties" => Some(Lang::Properties),
             "xml" => Some(Lang::Xml),
             "log" => Some(Lang::Log),
             "kt" | "kts" => Some(Lang::Kotlin),
@@ -88,6 +90,7 @@ pub fn spans(lang: Lang, text: &[u16], range: (usize, usize)) -> Vec<(usize, usi
     match lang {
         Lang::Json => json(text, end, &mut out),
         Lang::Toml => toml(text, end, &mut out),
+        Lang::Properties => properties(text, end, &mut out),
         Lang::Xml => xml(text, end, &mut out),
         Lang::Log => log(text, end, &mut out),
         Lang::Kotlin => c_like(text, end, KOTLIN_KEYWORDS, true, &mut out),
@@ -295,6 +298,45 @@ fn toml(t: &[u16], end: usize, out: &mut Vec<(usize, usize, Kind)>) {
             out.push((i, j, k));
         }
         i = j;
+    }
+}
+
+/// java.util.Properties: `#` or `!` starts a comment line, a key ends at its
+/// first unescaped `=`, `:` or blank, and a value ending in an odd number of
+/// backslashes goes on to the next line.
+fn properties(t: &[u16], end: usize, out: &mut Vec<(usize, usize, Kind)>) {
+    let mut i = 0;
+    while i < end {
+        let s = skip_blanks(t, i);
+        let mut e = line_end(t, s);
+        if s < e && one_of(t[s], b"#!") {
+            out.push((s, e, Kind::Comment));
+        } else if s < e {
+            let mut k = s;
+            while k < e && !one_of(t[k], b"=: \t") {
+                k += if t[k] == b'\\' as u16 { 2 } else { 1 };
+            }
+            let k = k.min(e);
+            if k > s {
+                out.push((s, k, Kind::Name));
+            }
+            let mut v = skip_blanks(t, k);
+            if v < e && one_of(t[v], b"=:") {
+                v = skip_blanks(t, v + 1);
+            }
+            let mut line = v;
+            while e < t.len() && (line..e).rev().take_while(|&j| t[j] == b'\\' as u16).count() % 2 == 1 {
+                line = if at(t, e, "\r\n") { e + 2 } else { e + 1 };
+                e = line_end(t, line);
+            }
+            if v < e {
+                out.push((v, e, Kind::String));
+            }
+        }
+        i = e;
+        while i < t.len() && is_eol(t[i]) {
+            i += 1;
+        }
     }
 }
 
@@ -747,6 +789,22 @@ mod tests {
         assert!(has(&v, "v", Kind::Name));
         assert!(has(&v, "true", Kind::Keyword));
         assert!(has(&v, "1979-05-27T07:32:00Z", Kind::Number));
+    }
+
+    #[test]
+    fn properties_keys_and_values() {
+        let v = lex(Lang::Properties, "# c\n! d\n  a.b = x y\nc:1\nd\\ e  long \\\n    more\nf\ng=\\\\\n#h");
+        assert!(has(&v, "# c", Kind::Comment));
+        assert!(has(&v, "! d", Kind::Comment));
+        assert!(has(&v, "a.b", Kind::Name));
+        assert!(has(&v, "x y", Kind::String));
+        assert!(has(&v, "c", Kind::Name));
+        assert!(has(&v, "1", Kind::String));
+        assert!(has(&v, "d\\ e", Kind::Name));
+        assert!(has(&v, "long \\\n    more", Kind::String));
+        assert!(has(&v, "f", Kind::Name));
+        assert!(has(&v, "\\\\", Kind::String));
+        assert!(has(&v, "#h", Kind::Comment));
     }
 
     #[test]

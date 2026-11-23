@@ -20,7 +20,7 @@ pub struct Settings {
     pub charset: u8,
     pub wrap: bool,
     pub status_bar: bool,
-    /// Color .json/.toml/.xml/.log/.kt/.java files.
+    /// Color .json/.toml/.properties/.xml/.log/.kt/.java files.
     pub syntax: bool,
     pub theme: Theme,
     /// Ask GitHub for a newer release at startup.
